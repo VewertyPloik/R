@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Basketball Shot - Made/Missed Tracker</title>
+<style>
+  html, body {
+    margin:0; padding:0; overflow:hidden;
+    background: #111;
+    color: white;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+  #gameCanvas {
+    background: #0a1a2a;
+    display: block;
+    margin: 0 auto;
+    border: 3px solid #444;
+    max-width: 100vw;
+    max-height: 100vh;
+  }
+  #ui {
+    position: fixed;
+    top:0; left:0; width:100vw; height:100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    pointer-events:none;
+  }
+  button {
+    font-size: 22px;
+    padding: 14px 32px;
+    border-radius: 10px;
+    border: none;
+    cursor: pointer;
+    background: #2e8b57;
+    color: white;
+    user-select:none;
+    pointer-events:auto;
+  }
+  button:hover {
+    background: #267047;
+  }
+  .ballSelector {
+    font-size: 42px;
+    margin: 0 15px;
+    padding: 6px 12px;
+    cursor: pointer;
+    border-radius: 12px;
+    border: 3px solid transparent;
+    user-select:none;
+    pointer-events:auto;
+    transition: border-color 0.3s;
+  }
+  .ballSelected {
+    border-color: gold;
+  }
+  #messagePopup {
+    position: absolute;
+    top: 35vh;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 32px;
+    font-weight: bold;
+    padding: 10px 30px;
+    border-radius: 12px;
+    pointer-events:none;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    user-select:none;
+  }
+  #madeMsg {
+    color: #0f0;
+    text-shadow: 0 0 12px #0f0;
+  }
+  #missedMsg {
+    color: #f44;
+    text-shadow: 0 0 12px #f44;
+  }
+  #scoreCounter {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    font-size: 20px;
+    background: rgba(0,0,0,0.5);
+    padding: 6px 14px;
+    border-radius: 12px;
+    user-select:none;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="400" height="600"></canvas>
+<div id="ui">
+  <button id="playBtn">Play</button>
+  <div style="margin-top:12px; font-size:22px; color:#ddd;">Select Ball:</div>
+  <div style="margin-top:8px; display:flex; justify-content:center; user-select:none;">
+    <div class="ballSelector" id="ball1">🏀</div>
+    <div class="ballSelector" id="ball2">⚽️</div>
+    <div class="ballSelector" id="ball3">⚾️</div>
+  </div>
+</div>
+
+<div id="messagePopup"></div>
+<div id="scoreCounter"></div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const ui = document.getElementById('ui');
+  const playBtn = document.getElementById('playBtn');
+  const ballSelectors = [...document.getElementsByClassName('ballSelector')];
+  const messagePopup = document.getElementById('messagePopup');
+  const scoreCounter = document.getElementById('scoreCounter');
+
+  let width = canvas.width;
+  let height = canvas.height;
+
+  // Responsive canvas scaling
+  function resizeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    width = rect.width * dpr;
+    height = rect.height * dpr;
+    canvas.width = width;
+    canvas.height = height;
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.scale(dpr, dpr);
+  }
+  function fitCanvas() {
+    let w = window.innerWidth;
+    let h = window.innerHeight;
+    let scaleWidth = w;
+    let scaleHeight = (w * 3) / 2;
+    if(scaleHeight > h){
+      scaleHeight = h;
+      scaleWidth = (h * 2) / 3;
+    }
+    canvas.style.width = scaleWidth + "px";
+    canvas.style.height = scaleHeight + "px";
+    resizeCanvas();
+  }
+  window.addEventListener('resize', fitCanvas);
+  window.addEventListener('orientationchange', fitCanvas);
+  fitCanvas();
+
+  // Game variables
+  let selectedBall = '🏀';
+  let shotPower = 0;
+  let shotDirection = 1;
+  let shotSpeed = 0.025;
+  let shooting = false;
+  let shotAnimationFrame = 0;
+  const shotFrames = 40;
+
+  // Shot made/missed tracking
+  let shotsMade = 0;
+  let shotsTaken = 0;
+
+  // Load saved stats
+  function loadStats() {
+    const made = parseInt(localStorage.getItem('shotsMade'));
+    const taken = parseInt(localStorage.getItem('shotsTaken'));
+    if (!isNaN(made)) shotsMade = made;
+    if (!isNaN(taken)) shotsTaken = taken;
+  }
+  function saveStats() {
+    localStorage.setItem('shotsMade', shotsMade);
+    localStorage.setItem('shotsTaken', shotsTaken);
+  }
+
+  // Update score counter display
+  function updateScoreCounter() {
+    scoreCounter.textContent = `Made: ${shotsMade} / Total: ${shotsTaken}`;
+  }
+
+  // Draw hoop - looks like big -| with rim as horizontal line
+  function drawHoop() {
+    const baseX = width/2;
+    const baseY = height/3;
+
+    // Vertical pole (|)
+    ctx.strokeStyle = '#663300';
+    ctx.lineWidth = 14;
+    ctx.beginPath();
+    ctx.moveTo(baseX + 70, baseY - 100);
+    ctx.lineTo(baseX + 70, baseY + 160);
+    ctx.stroke();
+
+    // Backboard (rectangle)
+    ctx.fillStyle = '#422800';
+    ctx.fillRect(baseX - 90, baseY - 100, 80, 120);
+    ctx.strokeStyle = '#aa7744';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(baseX - 90, baseY - 100, 80, 120);
+
+    // Rim (horizontal - )
+    ctx.strokeStyle = 'orange';
+    ctx.lineWidth = 12;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(baseX - 60, baseY + 25);
+    ctx.lineTo(baseX + 70, baseY + 25);
+    ctx.stroke();
+
+    // Net strings (simple vertical lines under rim)
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 3;
+    const netCount = 8;
+    const netSpacing = (130) / (netCount - 1);
+    for(let i=0; i<netCount; i++) {
+      const x = baseX - 60 + i * netSpacing;
+      ctx.beginPath();
+      ctx.moveTo(x, baseY + 25);
+      ctx.lineTo(x - 7, baseY + 80);
+      ctx.stroke();
+    }
+  }
+
+  // Draw ball emoji at (x,y)
+  function drawBall(x, y) {
+    ctx.font = '48px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(selectedBall, x, y);
+  }
+
+  // Shot bar position and size
+  const bar = {
+    x: width/2 - 140,
+    y: height - 120,
+    width: 280,
+    height: 32,
+  };
+
+  // Draw shot bar with red/yellow/green zones
+  function drawShotBar(power) {
+    // Red outer zone (100%)
+    ctx.fillStyle = '#cc0000';
+    ctx.fillRect(bar.x, bar.y, bar.width, bar.height);
+
+    // Yellow zone ~60%
+    const yellowMargin = bar.width * 0.2;
+    ctx.fillStyle = '#ccaa00';
+    ctx.fillRect(bar.x + yellowMargin, bar.y, bar.width - 2*yellowMargin, bar.height);
+
+    // Green small middle ~20%
+    const greenMargin = bar.width * 0.4;
+    ctx.fillStyle = '#00cc00';
+    ctx.fillRect(bar.x + greenMargin, bar.y, bar.width - 2*greenMargin, bar.height);
+
+    // White vertical line for current power
+    const pos = bar.x + power * bar.width;
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(pos, bar.y);
+    ctx.lineTo(pos, bar.y + bar.height);
+    ctx.stroke();
+  }
+
+  // Calculate shot chance from power (zones)
+  function getShotChance(power) {
+    if(power > 0.4 && power < 0.6) return 0.9; // green
+    if((power > 0.2 && power <= 0.4) || (power >= 0.6 && power < 0.8)) return 0.5; // yellow
+    return 0.1; // red
+  }
+
+  // Variables for animation
+  const hoopXStart = width/2 - 60; // left rim edge
+  const hoopXEnd = width/2 + 70;   // right rim edge
+  const hoopY = height/3 + 25;
+
+  // Animate ball going through rim (made shot)
+  function animateMadeShot(frame) {
+    ctx.clearRect(0,0,width,height);
+    drawHoop();
+
+    // Ball arcs through rim center (x center between rim edges)
+    const startX = width/2;
+    const startY = height - 80;
+    const cpX = width/2;
+    const cpY = hoopY + 50;
+    const endX = width/2 + 5;
+    const endY = hoopY + 80;
+
+    const t = frame / shotFrames;
+    const x = (1-t)*(1-t)*startX + 2*(1-t)*t*cpX + t*t*endX;
+    const y = (1-t)*(1-t)*startY + 2*(1-t)*t*cpY + t*t*endY;
+
+    drawBall(x, y);
+  }
+
+  // Animate ball missing (airball)
+  function animateMissedShot(frame) {
+    ctx.clearRect(0,0,width,height);
+    drawHoop();
+
+    // Ball arcs but goes left or right side and above rim
+    const startX = width/2;
+    const startY = height - 80;
+    const cpX = width/2 + (frame < shotFrames/2 ? -80 : 80);
+    const cpY = hoopY - 50;
+    const endX = width/2 + (frame < shotFrames/2 ? -100 : 100);
+    const endY = hoopY - 100;
+
+    const t = frame / shotFrames;
+    const x = (1-t)*(1-t)*startX + 2*(1-t)*t*cpX + t*t*endX;
+    const y = (1-t)*(1-t)*startY + 2*(1-t)*t*cpY + t*t*endY;
+
+    drawBall(x, y);
+  }
+
+  // Variables for shot animation
+  let animFrame = 0;
+  let shotMade = false;
+
+  // Show popup message
+  function showMessage(text, made) {
+    messagePopup.textContent = text;
+    messagePopup.style.opacity = '1';
+    messagePopup.style.color = made ? '#0f0' : '#f44';
+    messagePopup.style.textShadow = made ? '0 0 15px #0f0' : '0 0 15px #f44';
+    setTimeout(() => {
+      messagePopup.style.opacity = '0';
+    }, 1400);
+  }
+
+  // Main animation loop for shot
+  function shotAnimationLoop() {
+    if(animFrame <= shotFrames) {
+      if(shotMade) animateMadeShot(animFrame);
+      else animateMissedShot(animFrame);
+      animFrame++;
+      requestAnimationFrame(shotAnimationLoop);
+    } else {
+      shooting = false;
+      shotPower = 0;
+      animFrame = 0;
+      drawGameScreen();
+      updateScoreCounter();
+    }
+  }
+
+  // Draw main game screen with hoop, ball, shot bar, and score
+  function drawGameScreen() {
+    ctx.clearRect(0,0,width,height);
+    drawHoop();
+    drawBall(width/2, height - 80);
+    drawShotBar(shotPower);
+
+    // Draw Made/Total text top right (redundant because fixed div but good for canvas)
+    ctx.fillStyle = '#ddd';
+    ctx.font = '20px Arial';
+    ctx.textAlign = 'right';
+    ctx.fillText(`Made: ${shotsMade} / Total: ${shotsTaken}`, width - 20, 30);
+  }
+
+  // Shot power bar movement
+  function updateShotPower() {
+    if(!shooting) {
+      shotPower += shotSpeed;
+      if(shotPower >= 1 || shotPower <= 0) {
+        shotSpeed *= -1;
+        shotPower = Math.min(1, Math.max(0, shotPower));
+      }
+      drawGameScreen();
+    }
+  }
+
+  // Shoot function
+  function shoot() {
+    if(shooting) return;
+    shooting = true;
+    shotsTaken++;
+    const chance = getShotChance(shotPower);
+    shotMade = Math.random() < chance;
+    if(shotMade) shotsMade++;
+    saveStats();
+    updateScoreCounter();
+    showMessage(shotMade ? 'Made Shot!' : 'Missed Shot.', shotMade);
+    animFrame = 0;
+    shotAnimationLoop();
+  }
+
+  // Setup input handlers
+  function setupInput() {
+    canvas.addEventListener('touchstart', e => {
+      e.preventDefault();
+      if(!shooting) shoot();
+    }, {passive:false});
+    canvas.addEventListener('mousedown', e => {
+      if(!shooting) shoot();
+    });
+  }
+
+  // Ball selector click handlers
+  ballSelectors.forEach(ballEl => {
+    ballEl.addEventListener('click', () => {
+      selectedBall = ballEl.textContent;
+      ballSelectors.forEach(el => el.classList.remove('ballSelected'));
+      ballEl.classList.add('ballSelected');
+    });
+  });
+
+  // Play button handler
+  playBtn.addEventListener('click', () => {
+    ui.style.display = 'none';
+    shooting = false;
+    shotPower = 0;
+    shotSpeed = 0.025 + Math.random() * 0.01;
+    drawGameScreen();
+  });
+
+  // Initial setup
+  function init() {
+    loadStats();
+    updateScoreCounter();
+    ballSelectors.forEach(el => {
+      if(el.textContent === selectedBall) el.classList.add('ballSelected');
+    });
+    setupInput();
+    // Initially draw home screen UI visible
+    ui.style.display = 'flex';
+    ctx.clearRect(0,0,width,height);
+    drawHoop();
+    drawBall(width/2, height - 80);
+  }
+  init();
+
+  // Main loop for shot power bar movement & drawing
+  function mainLoop() {
+    if(!shooting && ui.style.display === 'none') {
+      updateShotPower();
+    }
+    requestAnimationFrame(mainLoop);
+  }
+  mainLoop();
+
+})();
+</script>
+
+</body>
+</html>
