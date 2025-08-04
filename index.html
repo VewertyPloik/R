@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Stickmen Hook Game</title>
+<style>
+  body, html {
+    margin: 0; padding: 0; overflow: hidden; 
+    font-family: Arial, sans-serif;
+    background: #222;
+    color: white;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+  }
+  #gameCanvas {
+    background: #333;
+    display: block;
+    margin: auto;
+    border: 2px solid #555;
+    max-width: 100vw;
+    max-height: 100vh;
+  }
+  #ui {
+    position: fixed;
+    top: 0; left: 0; width: 100vw; height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  button {
+    font-size: 18px;
+    padding: 12px 20px;
+    margin: 8px;
+    cursor: pointer;
+    border-radius: 6px;
+    border: none;
+    background: #4CAF50;
+    color: white;
+    min-width: 180px;
+  }
+  button:disabled {
+    background: #777;
+    cursor: default;
+  }
+  .skin {
+    display: inline-block;
+    border: 3px solid white;
+    padding: 15px;
+    margin: 10px;
+    cursor: pointer;
+    width: 120px;
+    border-radius: 10px;
+    user-select: none;
+  }
+  .skin.locked {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .skin.selected {
+    border-color: gold;
+  }
+  #mobileControls {
+    position: fixed;
+    bottom: 20px;
+    width: 100vw;
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    pointer-events: none;
+  }
+  .controlBtn {
+    pointer-events: auto;
+    user-select: none;
+    background: #444;
+    border-radius: 50%;
+    width: 70px;
+    height: 70px;
+    font-size: 30px;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 15px #0008;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .controlBtn:active {
+    background: #777;
+  }
+  #coinDisplay {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    font-size: 22px;
+    font-weight: bold;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="400" height="600"></canvas>
+<div id="ui"></div>
+
+<div id="mobileControls" style="display:none;">
+  <div id="leftBtn" class="controlBtn">&#8592;</div>
+  <div id="hookBtn" class="controlBtn">&#128279;</div>
+  <div id="rightBtn" class="controlBtn">&#8594;</div>
+</div>
+
+<div id="coinDisplay">Coins: 0</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  let width = canvas.width;
+  let height = canvas.height;
+
+  // Scale canvas for device pixel ratio
+  function resizeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    width = rect.width * dpr;
+    height = rect.height * dpr;
+    canvas.width = width;
+    canvas.height = height;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+  }
+  function fitCanvas() {
+    // Fit canvas size to window but keep aspect ratio 2:3
+    let w = window.innerWidth;
+    let h = window.innerHeight;
+    let scaleWidth = w;
+    let scaleHeight = (w * 3) / 2;
+    if (scaleHeight > h) {
+      scaleHeight = h;
+      scaleWidth = (h * 2) / 3;
+    }
+    canvas.style.width = scaleWidth + "px";
+    canvas.style.height = scaleHeight + "px";
+    resizeCanvas();
+  }
+  window.addEventListener('resize', fitCanvas);
+  window.addEventListener('orientationchange', fitCanvas);
+  fitCanvas();
+
+  // Game state
+  const gameState = {
+    screen: 'home', // 'home', 'levelSelect', 'skinShop', 'skinSelect', 'playing', 'levelComplete'
+    coins: 0,
+    currentLevel: 1,
+    maxLevelUnlocked: 1,
+    skins: [
+      {name: 'Classic', cost: 0, unlocked: true, color: 'white'},
+      {name: 'Red', cost: 100, unlocked: false, color: 'red'},
+      {name: 'Blue', cost: 250, unlocked: false, color: 'deepskyblue'},
+      {name: 'Green', cost: 500, unlocked: false, color: 'limegreen'},
+      {name: 'Gold', cost: 1000, unlocked: false, color: 'gold'},
+    ],
+    selectedSkin: 0,
+    levelData: [],
+    player: null,
+    levelComplete: false,
+  };
+
+  // Save/load progress
+  function saveProgress() {
+    const saveObj = {
+      coins: gameState.coins,
+      maxLevelUnlocked: gameState.maxLevelUnlocked,
+      skinsUnlocked: gameState.skins.map(s => s.unlocked),
+      selectedSkin: gameState.selectedSkin
+    };
+    localStorage.setItem('stickmenHookSave', JSON.stringify(saveObj));
+    updateCoinDisplay();
+  }
+  function loadProgress() {
+    const saveStr = localStorage.getItem('stickmenHookSave');
+    if (saveStr) {
+      try {
+        const saveObj = JSON.parse(saveStr);
+        gameState.coins = saveObj.coins || 0;
+        gameState.maxLevelUnlocked = saveObj.maxLevelUnlocked || 1;
+        if (saveObj.skinsUnlocked && Array.isArray(saveObj.skinsUnlocked)) {
+          for (let i = 0; i < gameState.skins.length; i++) {
+            gameState.skins[i].unlocked = saveObj.skinsUnlocked[i] || false;
+          }
+        }
+        gameState.skins[0].unlocked = true;
+        gameState.selectedSkin = saveObj.selectedSkin || 0;
+      } catch(e) {}
+    }
+  }
+  loadProgress();
+
+  // UI container
+  const ui = document.getElementById('ui');
+  const mobileControls = document.getElementById('mobileControls');
+  const leftBtn = document.getElementById('leftBtn');
+  const rightBtn = document.getElementById('rightBtn');
+  const hookBtn = document.getElementById('hookBtn');
+  const coinDisplay = document.getElementById('coinDisplay');
+
+  function updateCoinDisplay() {
+    coinDisplay.textContent = `Coins: ${gameState.coins}`;
+  }
+  updateCoinDisplay();
+
+  // Levels generator
+  function createLevelData() {
+    const levels = [];
+    for (let i = 1; i <= 50; i++) {
+      let platforms = [];
+      let coins = [];
+      let hooks = [];
+
+      const platformCount = Math.min(6, 3 + Math.floor(i / 10));
+      let baseY = height - 50;
+      for (let p = 0; p < platformCount; p++) {
+        const w = 80 + Math.random() * 100;
+        const x = Math.random() * (width - w - 40) + 20;
+        const y = baseY - p * 90 - Math.random() * 30;
+        platforms.push({x, y, width: w});
+        // hooks at edges
+        hooks.push({x: x, y: y});
+        hooks.push({x: x + w, y: y});
+      }
+
+      // Coins: 3-6 per level
+      const coinCount = 3 + Math.floor(Math.random() * 4);
+      for (let c = 0; c < coinCount; c++) {
+        const plat = platforms[Math.floor(Math.random() * platforms.length)];
+        const cx = plat.x + 15 + Math.random() * (plat.width - 30);
+        const cy = plat.y - 20;
+        coins.push({x: cx, y: cy, collected: false});
+      }
+
+      // Goal: flag on last platform center top
+      const lastPlatform = platforms[platforms.length - 1];
+      const goal = {x: lastPlatform.x + lastPlatform.width / 2, y: lastPlatform.y - 30, r: 15};
+
+      levels.push({platforms, coins, hooks, goal});
+    }
+    return levels;
+  }
+  gameState.levelData = createLevelData();
+
+  // Player factory
+  function createPlayer() {
+    return {
+      x: 50,
+      y: height - 80,
+      radius: 12,
+      vx: 0,
+      vy: 0,
+      onPlatform: true,
+      hookActive: false,
+      hookX: 0,
+      hookY: 0,
+      hookLength: 0,
+      hookAngle: 0,
+      swingingSpeed: 0,
+    };
+  }
+
+  // Start a level
+  function startLevel(levelNum) {
+    gameState.currentLevel = levelNum;
+    gameState.player = createPlayer();
+    // Reset coins
+    gameState.levelData[levelNum - 1].coins.forEach(c => c.collected = false);
+    gameState.levelComplete = false;
+    gameState.screen = 'playing';
+    updateCoinDisplay();
+    showMobileControls(true);
+  }
+
+  // Physics constants
+  const gravity = 0.6;
+  const swingAcceleration = 0.03;
+  const maxSwingSpeed = 0.18;
+
+  // Controls state
+  let leftPressed = false;
+  let rightPressed = false;
+  let hookPressed = false;
+
+  // Setup desktop keyboard input
+  window.addEventListener('keydown', e => {
+    if (gameState.screen === 'playing') {
+      if (e.code === 'ArrowLeft' || e.code === 'KeyA') leftPressed = true;
+      if (e.code === 'ArrowRight' || e.code === 'KeyD') rightPressed = true;
+      if (e.code === 'Space') hookPressed = true;
+    }
+  });
+  window.addEventListener('keyup', e => {
+    if (gameState.screen === 'playing') {
+      if (e.code === 'ArrowLeft' || e.code === 'KeyA') leftPressed = false;
+      if (e.code === 'ArrowRight' || e.code === 'KeyD') rightPressed = false;
+      if (e.code === 'Space') hookPressed = false;
+    }
+  });
+
+  // Mobile button events
+  leftBtn.addEventListener('touchstart', e => { e.preventDefault(); leftPressed = true; });
+  leftBtn.addEventListener('touchend', e => { e.preventDefault(); leftPressed = false; });
+  rightBtn.addEventListener('touchstart', e => { e.preventDefault(); rightPressed = true; });
+  rightBtn.addEventListener('touchend', e => { e.preventDefault(); rightPressed = false; });
+  hookBtn.addEventListener('touchstart', e => { e.preventDefault(); hookPressed = true; });
+  hookBtn.addEventListener('touchend', e => { e.preventDefault(); hookPressed = false; });
+
+  // Show/hide mobile controls
+  function showMobileControls(show) {
+    if (show) {
+      mobileControls.style.display = 'flex';
+    } else {
+      mobileControls.style.display = 'none';
+    }
+  }
+
+  // Check platform collision
+  function checkPlatformCollision(px, py) {
+    const level = gameState.levelData[gameState.currentLevel - 1];
+    for (let plat of level.platforms) {
+      if (py + gameState.player.radius >= plat.y &&
+          py + gameState.player.radius <= plat.y + 10 &&
+          px >= plat.x && px <= plat.x + plat.width) {
+        return plat.y;
+      }
+    }
+    return null;
+  }
+
+  // Update game logic
+  function updateGame(dt) {
+    const p = gameState.player;
+    const level = gameState.levelData[gameState.currentLevel - 1];
+
+    if (p.hookActive) {
+      if (leftPressed) p.swingingSpeed -= swingAcceleration * dt;
+      if (rightPressed) p.swingingSpeed += swingAcceleration * dt;
+
+      p.swingingSpeed = Math.max(-maxSwingSpeed, Math.min(maxSwingSpeed, p.swingingSpeed));
+      p.hookAngle += p.swingingSpeed * dt;
+
+      p.x = p.hookX + Math.cos(p.hookAngle) * p.hookLength;
+      p.y = p.hookY + Math.sin(p.hookAngle) * p.hookLength;
+
+      if (!hookPressed || p.y > height + 50) {
+        p.hookActive = false;
+        p.vx = p.swingingSpeed * -p.hookLength * Math.sin(p.hookAngle);
+        p.vy = p.swingingSpeed * p.hookLength * Math.cos(p.hookAngle);
+      }
+    } else {
+      p.vy += gravity * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+
+      let platY = checkPlatformCollision(p.x, p.y);
+      if (platY !== null && p.vy >= 0) {
+        p.y = platY - p.radius;
+        p.vy = 0;
+        p.vx *= 0.8;
+        p.onPlatform = true;
+      } else {
+        p.onPlatform = false;
+      }
+
+      if (hookPressed && !p.hookActive) {
+        let nearestHook = null;
+        let minDist = 150;
+        for (let h of level.hooks) {
+          let dx = h.x - p.x;
+          let dy = h.y - p.y;
+          let dist = Math.sqrt(dx*dx + dy*dy);
+          if (dist < minDist) {
+            minDist = dist;
+            nearestHook = h;
+          }
+        }
+        if (nearestHook) {
+          p.hookActive = true;
+          p.hookX = nearestHook.x;
+          p.hookY = nearestHook.y;
+          p.hookLength = minDist;
+          p.hookAngle = Math.atan2(p.y - nearestHook.y, p.x - nearestHook.x);
+          p.swingingSpeed = 0;
+        }
+      }
+    }
+
+    // Boundaries
+    if (p.x < 0) p.x = 0;
+    if (p.x > width) p.x = width;
+    if (p.y > height + 100) {
+      startLevel(gameState.currentLevel);
+    }
+
+    // Collect coins
+    for (let c of level.coins) {
+      if (!c.collected) {
+        let dx = c.x - p.x;
+        let dy = c.y - p.y;
+        if (Math.sqrt(dx*dx + dy*dy) < p.radius + 10) {
+          c.collected = true;
+          gameState.coins++;
+          saveProgress();
+        }
+      }
+    }
+
+    // Level complete check
+    let dx = level.goal.x - p.x;
+    let dy = level.goal.y - p.y;
+    if (Math.sqrt(dx*dx + dy*dy) < level.goal.r + p.radius) {
+      gameState.levelComplete = true;
+      gameState.screen = 'levelComplete';
+      showMobileControls(false);
+      if (gameState.currentLevel === gameState.maxLevelUnlocked && gameState.maxLevelUnlocked < 50) {
+        gameState.maxLevelUnlocked++;
+      }
+      saveProgress();
+      renderLevelCompleteScreen();
+    }
+  }
+
+  // Draw player
+  function drawPlayer() {
+    const p = gameState.player;
+    const skin = gameState.skins[gameState.selectedSkin];
+
+    // Hook line
+    if (p.hookActive) {
+      ctx.strokeStyle = 'yellow';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(p.hookX, p.hookY);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+    }
+
+    // Player circle
+    ctx.fillStyle = skin.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Stick arms & legs
+    ctx.strokeStyle = skin.color;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.x, p.y + 25);
+    ctx.moveTo(p.x, p.y + 10);
+    ctx.lineTo(p.x - 15, p.y + 10);
+    ctx.moveTo(p.x, p.y + 10);
+    ctx.lineTo(p.x + 15, p.y + 10);
+    ctx.moveTo(p.x, p.y + 25);
+    ctx.lineTo(p.x - 10, p.y + 40);
+    ctx.moveTo(p.x, p.y + 25);
+    ctx.lineTo(p.x + 10, p.y + 40);
+    ctx.stroke();
+  }
+
+  // Draw level
+  function drawLevel() {
+    const level = gameState.levelData[gameState.currentLevel - 1];
+    ctx.fillStyle = '#333';
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.fillStyle = '#666';
+    for (let plat of level.platforms) {
+      ctx.fillRect(plat.x, plat.y, plat.width, 10);
+    }
+
+    for (let c of level.coins) {
+      if (!c.collected) {
+        ctx.fillStyle = 'gold';
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'orange';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+
+    for (let h of level.hooks) {
+      ctx.fillStyle = 'yellow';
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'orange';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    const g = level.goal;
+    ctx.fillStyle = 'lime';
+    ctx.beginPath();
+    ctx.arc(g.x, g.y, g.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'darkgreen';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    ctx.strokeStyle = 'darkgreen';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(g.x, g.y);
+    ctx.lineTo(g.x, g.y + 30);
+    ctx.stroke();
+
+    ctx.fillStyle = 'lime';
+    ctx.beginPath();
+    ctx.moveTo(g.x, g.y);
+    ctx.lineTo(g.x + 15, g.y + 10);
+    ctx.lineTo(g.x, g.y + 15);
+    ctx.fill();
+
+    ctx.fillStyle = 'white';
+    ctx.font = '20px Arial';
+    ctx.fillText('Level ' + gameState.currentLevel, width/2 - 40, 30);
+    ctx.fillText('Coins: ' + gameState.coins, 10, 30);
+
+    ctx.font = '14px Arial';
+    ctx.fillText('← → to swing', 10, height - 50);
+    ctx.fillText('Hook: ⎋ (space/mobile)', 10, height - 30);
+  }
+
+  // Render loop for playing
+  function renderGame() {
+    drawLevel();
+    drawPlayer();
+  }
+
+  // UI Screens ----------------------------------------
+
+  // Clear UI
+  function clearUI() {
+    ui.innerHTML = '';
+  }
+
+  // Home Screen
+  function renderHomeScreen() {
+    clearUI();
+    showMobileControls(false);
+
+    const container = document.createElement('div');
+    container.style.textAlign = 'center';
+
+    const title = document.createElement('h1');
+    title.textContent = 'Stickmen Hook';
+    container.appendChild(title);
+
+    const playBtn = document.createElement('button');
+    playBtn.textContent = 'Play Levels';
+    playBtn.onclick = () => {
+      renderLevelSelectScreen();
+    };
+    container.appendChild(playBtn);
+
+    const skinShopBtn = document.createElement('button');
+    skinShopBtn.textContent = 'Skin Shop';
+    skinShopBtn.onclick = () => {
+      renderSkinShopScreen();
+    };
+    container.appendChild(skinShopBtn);
+
+    const skinSelectBtn = document.createElement('button');
+    skinSelectBtn.textContent = 'Select Skin';
+    skinSelectBtn.onclick = () => {
+      renderSkinSelectScreen();
+    };
+    container.appendChild(skinSelectBtn);
+
+    ui.appendChild(container);
+  }
+
+  // Level Select Screen
+  function renderLevelSelectScreen() {
+    clearUI();
+    showMobileControls(false);
+
+    const container = document.createElement('div');
+    container.style.textAlign = 'center';
+
+    const title = document.createElement('h2');
+    title.textContent = 'Select Level';
+    container.appendChild(title);
+
+    // Grid of level buttons
+    const grid = document.createElement('div');
+    grid.style.display = 'grid';
+    grid.style.gridTemplateColumns = 'repeat(5, 60px)';
+    grid.style.gap = '12px';
+    grid.style.justifyContent = 'center';
+
+    for (let i = 1; i <= 50; i++) {
+      const btn = document.createElement('button');
+      btn.textContent = i;
+      btn.disabled = i > gameState.maxLevelUnlocked;
+      btn.style.background = (i === gameState.currentLevel) ? '#2196f3' : '#4CAF50';
+      btn.style.color = 'white';
+      btn.style.fontWeight = 'bold';
+      btn.style.padding = '12px 0';
+      btn.onclick = () => {
+        startLevel(i);
+      };
+      grid.appendChild(btn);
+    }
+
+    container.appendChild(grid);
+
+    const backBtn = document.createElement('button');
+    backBtn.textContent = 'Back to Home';
+    backBtn.onclick = () => {
+      gameState.screen = 'home';
+      renderHomeScreen();
+    };
+    backBtn.style.marginTop = '20px';
+    container.appendChild(backBtn);
+
+    ui.appendChild(container);
+  }
+
+  // Skin Shop Screen
+  function renderSkinShopScreen() {
+    clearUI();
+    showMobileControls(false);
+
+    const container = document.createElement('div');
+    container.style.textAlign = 'center';
+
+    const title = document.createElement('h2');
+    title.textContent = 'Skin Shop';
+    container.appendChild(title);
+
+    const skinsDiv = document.createElement('div');
+    skinsDiv.style.display = 'flex';
+    skinsDiv.style.justifyContent = 'center';
+    skinsDiv.style.flexWrap = 'wrap';
+
+    gameState.skins.forEach((skin, i) => {
+      const skinDiv = document.createElement('div');
+      skinDiv.classList.add('skin');
+      if (!skin.unlocked) skinDiv.classList.add('locked');
+      if (gameState.selectedSkin === i) skinDiv.classList.add('selected');
+      skinDiv.style.borderColor = skin.color;
+      skinDiv.style.color = skin.color;
+      skinDiv.textContent = skin.name;
+      skinDiv.title = `Cost: ${skin.cost} coins`;
+      skinDiv.style.userSelect = 'none';
+
+      if (!skin.unlocked) {
+        skinDiv.onclick = () => {
+          if (gameState.coins >= skin.cost) {
+            gameState.coins -= skin.cost;
+            skin.unlocked = true;
+            saveProgress();
+            renderSkinShopScreen();
+          } else {
+            alert('Not enough coins!');
+          }
+        };
+      } else {
+        skinDiv.style.cursor = 'default';
+      }
+      skinsDiv.appendChild(skinDiv);
+    });
+
+    container.appendChild(skinsDiv);
+
+    const backBtn = document.createElement('button');
+    backBtn.textContent = 'Back to Home';
+    backBtn.onclick = () => {
+      gameState.screen = 'home';
+      renderHomeScreen();
+    };
+    backBtn.style.marginTop = '20px';
+    container.appendChild(backBtn);
+
+    ui.appendChild(container);
+  }
+
+  // Skin Select Screen
+  function renderSkinSelectScreen() {
+    clearUI();
+    showMobileControls(false);
+
+    const container = document.createElement('div');
+    container.style.textAlign = 'center';
+
+    const title = document.createElement('h2');
+    title.textContent = 'Select Skin';
+    container.appendChild(title);
+
+    const skinsDiv = document.createElement('div');
+    skinsDiv.style.display = 'flex';
+    skinsDiv.style.justifyContent = 'center';
+    skinsDiv.style.flexWrap = 'wrap';
+
+    gameState.skins.forEach((skin, i) => {
+      const skinDiv = document.createElement('div');
+      skinDiv.classList.add('skin');
+      if (!skin.unlocked) skinDiv.classList.add('locked');
+      if (gameState.selectedSkin === i) skinDiv.classList.add('selected');
+      skinDiv.style.borderColor = skin.color;
+      skinDiv.style.color = skin.color;
+      skinDiv.textContent = skin.name;
+      skinDiv.style.userSelect = 'none';
+
+      if (skin.unlocked) {
+        skinDiv.onclick = () => {
+          gameState.selectedSkin = i;
+          saveProgress();
+          renderSkinSelectScreen();
+        };
+      }
+      skinsDiv.appendChild(skinDiv);
+    });
+
+    container.appendChild(skinsDiv);
+
+    const backBtn = document.createElement('button');
+    backBtn.textContent = 'Back to Home';
+    backBtn.onclick = () => {
+      gameState.screen = 'home';
+      renderHomeScreen();
+    };
+    backBtn.style.marginTop = '20px';
+    container.appendChild(backBtn);
+
+    ui.appendChild(container);
+  }
+
+  // Level Complete Screen
+  function renderLevelCompleteScreen() {
+    clearUI();
+    showMobileControls(false);
+
+    const container = document.createElement('div');
+    container.style.textAlign = 'center';
+
+    const title = document.createElement('h2');
+    title.textContent = 'Level Complete!';
+    container.appendChild(title);
+
+    const coinsEarned = gameState.levelData[gameState.currentLevel - 1].coins.filter(c => c.collected).length;
+
+    const coinsText = document.createElement('p');
+    coinsText.textContent = `Coins collected this level: ${coinsEarned}`;
+    container.appendChild(coinsText);
+
+    const nextBtn = document.createElement('button');
+    nextBtn.textContent = 'Next Level';
+    nextBtn.disabled = (gameState.currentLevel >= 50);
+    nextBtn.onclick = () => {
+      startLevel(gameState.currentLevel + 1);
+    };
+    container.appendChild(nextBtn);
+
+    const selectBtn = document.createElement('button');
+    selectBtn.textContent = 'Select Level';
+    selectBtn.onclick = () => {
+      renderLevelSelectScreen();
+    };
+    container.appendChild(selectBtn);
+
+    const homeBtn = document.createElement('button');
+    homeBtn.textContent = 'Back to Home';
+    homeBtn.onclick = () => {
+      gameState.screen = 'home';
+      renderHomeScreen();
+    };
+    container.appendChild(homeBtn);
+
+    ui.appendChild(container);
+  }
+
+  // Main loop
+  let lastTime = 0;
+  function gameLoop(timestamp=0) {
+    const dt = (timestamp - lastTime) / 16;
+    lastTime = timestamp;
+
+    if (gameState.screen === 'playing') {
+      updateGame(dt);
+      renderGame();
+    }
+    requestAnimationFrame(gameLoop);
+  }
+
+  // Start at Home Screen
+  renderHomeScreen();
+  gameLoop();
+
+})();
+</script>
+
+</body>
+</html>
